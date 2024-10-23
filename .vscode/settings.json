@@ -1,5 +1,7 @@
 {
     "files.associations": {
-        "bsp.h": "c"
+        "bsp.h": "c",
+        "mlx90640_api.h": "c",
+        "includes.h": "c"
     }
 }

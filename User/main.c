@@ -46,6 +46,7 @@ void AppTaskUserIF(void *argument);
 void AppTaskLED(void *argument);
 void AppTaskMsgPro(void *argument);
 void AppTaskStart(void *argument);
+void AppTaskMLX90640(void *argument);
 
 
 /*
@@ -94,10 +95,20 @@ const osThreadAttr_t ThreadUserIF_Attr =
 	.stack_size = 1024,
 };
 
+const osThreadAttr_t ThreadMLX90640_Attr = 
+{
+    .name = "osRtxMLX90640Thread",
+    .attr_bits = osThreadDetached,
+    .priority = osPriorityNormal,
+    .stack_size = 2048,  // 设置合适的堆栈大小
+};
+
+
 /* 任务句柄 */
 osThreadId_t ThreadIdTaskUserIF = NULL;
 osThreadId_t ThreadIdTaskMsgPro = NULL;
 osThreadId_t ThreadIdTaskLED = NULL;
+osThreadId_t ThreadIdTaskMLX90640 = NULL;
 osThreadId_t ThreadIdStart = NULL;
 
 
@@ -128,6 +139,77 @@ int main (void)
 	
 	while(1);
 }
+
+#define MLX90640_SLAVE_ADDR  0x33  // 7位地址
+#define MLX90640_FRAME_DELAY 1000  // 每帧延迟1秒（1000ms）
+
+static paramsMLX90640 mlx90640;  // 存储校准参数
+
+// 任务函数：MLX90640 传感器任务
+void AppTaskMLX90640(void *argument)
+{
+    uint16_t eeData[832];         // EEPROM 数据
+    uint16_t frameData[834];      // 存储传感器帧数据
+    float temperatureData[768];   // 存储计算出的温度
+    float emissivity = 1.0f;      // 辐射率（一般为 1.0）
+    float tr = 23.0f;             // 环境反射温度（单位：摄氏度）
+    
+    int error;
+    uint16_t controlRegister;
+
+    // 1. 初始化 I2C
+    // MLX90640_I2CInit();
+
+    // 2. 检查设备响应 - 通过读取控制寄存器确认
+    error = MLX90640_I2CRead(MLX90640_SLAVE_ADDR, MLX90640_CTRL_REG, 1, &controlRegister);
+    if (error != 0) {
+        printf("MLX90640 连接失败，无法读取控制寄存器，错误代码: %d\r\n", error);
+        osThreadExit();  // 任务退出
+    }
+
+    // 3. 从 EEPROM 读取校准参数
+    error = MLX90640_DumpEE(MLX90640_SLAVE_ADDR, eeData);
+    if (error != 0) {
+        printf("读取 EEPROM 数据失败，错误代码: %d\r\n", error);
+        osThreadExit();  // 任务退出
+    }
+
+    // 4. 提取校准参数
+    error = MLX90640_ExtractParameters(eeData, &mlx90640);
+    if (error != 0) {
+        printf("提取校准参数失败，错误代码: %d\r\n", error);
+        osThreadExit();  // 任务退出
+    }
+
+    // 5. 设置刷新率（例如 16 Hz）
+    error = MLX90640_SetRefreshRate(MLX90640_SLAVE_ADDR, 0x03);  // 16Hz
+    if (error != 0) {
+        printf("设置刷新率失败，错误代码: %d\r\n", error);
+        osThreadExit();  // 任务退出
+    }
+
+    // 循环读取温度数据
+    while (1) {
+        // 6. 获取帧数据
+        error = MLX90640_GetFrameData(MLX90640_SLAVE_ADDR, frameData);
+        if (error != 0) {
+            printf("读取帧数据失败，错误代码: %d\r\n", error);
+            continue;
+        }
+
+        // 7. 计算每个像素的温度
+        MLX90640_CalculateTo(frameData, &mlx90640, emissivity, tr, temperatureData);
+
+        // 8. 输出或处理温度数据
+        for (int i = 0; i < 768; i++) {
+            printf("Pixel %d: 温度 = %.2f°C\r\n", i, temperatureData[i]);
+        }
+
+        // 9. 等待下一帧读取（每秒钟读取一次）
+        osDelay(MLX90640_FRAME_DELAY);
+    }
+}
+
 
 /*
 *********************************************************************************************************
@@ -259,6 +341,7 @@ static void AppTaskCreate (void)
 	ThreadIdTaskMsgPro = osThreadNew(AppTaskMsgPro, NULL, &ThreadMsgPro_Attr);  
 	ThreadIdTaskLED = osThreadNew(AppTaskLED, NULL, &ThreadLED_Attr);  
 	ThreadIdTaskUserIF = osThreadNew(AppTaskUserIF, NULL, &ThreadUserIF_Attr);  
+	ThreadIdTaskMLX90640 = osThreadNew(AppTaskMLX90640, NULL, &ThreadMLX90640_Attr);  
 }
 
 /***************************** 安富莱电子 www.armfly.com (END OF FILE) *********************************/
